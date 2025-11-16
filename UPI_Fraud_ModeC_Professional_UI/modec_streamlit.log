@@ -1,0 +1,107 @@
+
+Collecting usage statistics. To deactivate, set browser.gatherUsageStats to false.
+
+
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8502
+  Network URL: http://10.0.2.11:8502
+  External URL: http://20.192.21.51:8502
+
+/home/codespace/.local/lib/python3.12/site-packages/sklearn/base.py:442: InconsistentVersionWarning: Trying to unpickle estimator LogisticRegression from version 1.1.3 when using version 1.7.2. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+/home/codespace/.local/lib/python3.12/site-packages/sklearn/base.py:442: InconsistentVersionWarning: Trying to unpickle estimator IsotonicRegression from version 1.1.3 when using version 1.7.2. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+/home/codespace/.local/lib/python3.12/site-packages/sklearn/base.py:442: InconsistentVersionWarning: Trying to unpickle estimator CalibratedClassifierCV from version 1.1.3 when using version 1.7.2. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+/home/codespace/.local/lib/python3.12/site-packages/sklearn/base.py:442: InconsistentVersionWarning: Trying to unpickle estimator ExtraTreeRegressor from version 1.1.3 when using version 1.7.2. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+2025-11-16 18:54:58.035 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2025-11-16 18:54:58.046 Uncaught app execution
+Traceback (most recent call last):
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 129, in exec_func_with_error_handling
+    result = func()
+             ^^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 669, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/UPI_Fraud_Detection-Using-ML/UPI_Fraud_ModeC_Professional_UI/streamlit_app/app.py", line 162, in <module>
+    st.download_button("Download dataset CSV", DATA_DIR / "enhanced_fraud_features_modec.csv")
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/metrics_util.py", line 447, in wrapped_func
+    result = non_optional_func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/elements/widgets/button.py", line 574, in download_button
+    return self._download_button(
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/elements/widgets/button.py", line 936, in _download_button
+    marshall_file(
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/elements/widgets/button.py", line 1223, in marshall_file
+    raise StreamlitAPIException(f"Invalid binary data format: {type(data)}")
+streamlit.errors.StreamlitAPIException: Invalid binary data format: <class 'pathlib.PosixPath'>
+2025-11-16 18:55:47.340 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2025-11-16 18:55:47.344 Uncaught app execution
+Traceback (most recent call last):
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 129, in exec_func_with_error_handling
+    result = func()
+             ^^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 669, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/UPI_Fraud_Detection-Using-ML/UPI_Fraud_ModeC_Professional_UI/streamlit_app/app.py", line 162, in <module>
+    st.download_button("Download dataset CSV", DATA_DIR / "enhanced_fraud_features_modec.csv")
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/metrics_util.py", line 447, in wrapped_func
+    result = non_optional_func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/elements/widgets/button.py", line 574, in download_button
+    return self._download_button(
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/elements/widgets/button.py", line 936, in _download_button
+    marshall_file(
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/elements/widgets/button.py", line 1223, in marshall_file
+    raise StreamlitAPIException(f"Invalid binary data format: {type(data)}")
+streamlit.errors.StreamlitAPIException: Invalid binary data format: <class 'pathlib.PosixPath'>
+2025-11-16 18:56:00.021 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2025-11-16 18:56:00.024 Uncaught app execution
+Traceback (most recent call last):
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 129, in exec_func_with_error_handling
+    result = func()
+             ^^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 669, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/UPI_Fraud_Detection-Using-ML/UPI_Fraud_ModeC_Professional_UI/streamlit_app/app.py", line 122, in <module>
+    from src.predict_modec import predict_single
+ModuleNotFoundError: No module named 'src'
+2025-11-16 18:56:13.736 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2025-11-16 18:56:13.740 Uncaught app execution
+Traceback (most recent call last):
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 129, in exec_func_with_error_handling
+    result = func()
+             ^^^^^^
+  File "/usr/local/python/3.12.1/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 669, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/UPI_Fraud_Detection-Using-ML/UPI_Fraud_ModeC_Professional_UI/streamlit_app/app.py", line 122, in <module>
+    from src.predict_modec import predict_single
+ModuleNotFoundError: No module named 'src'
+  Stopping...

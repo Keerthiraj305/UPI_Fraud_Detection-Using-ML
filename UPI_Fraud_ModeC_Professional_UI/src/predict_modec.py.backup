@@ -1,0 +1,336 @@
+
+import joblib, pandas as pd, numpy as np
+from pathlib import Path
+# Use module-relative ROOT so files are found regardless of current working directory
+ROOT = Path(__file__).resolve().parents[1]
+# Lazy-load models with fallbacks so import doesn't fail if a dependency or binary
+# is incompatible. Modules will be None if loading fails; predict_single will
+# handle missing components gracefully.
+def _safe_load(path):
+    try:
+        return joblib.load(path)
+    except Exception:
+        return None
+
+xgb = _safe_load(ROOT / 'models' / 'xgb_raw.joblib')
+iso = _safe_load(ROOT / 'models' / 'isolation_forest.joblib')
+meta = _safe_load(ROOT / 'models' / 'meta_lr.joblib')
+cal = _safe_load(ROOT / 'models' / 'final_calibrated_meta.joblib')
+try:
+    features = pd.read_csv(ROOT / 'models' / 'feature_list.csv')['feature'].tolist()
+except Exception:
+    features = []
+if not features:
+    # fallback to a minimal, sensible feature set so predictions react to changes
+    features = ['amount', 'hour', 'is_night', 'amount_over_user_avg', 'z_amount_user']
+    print(f"[predict_modec] WARNING: feature_list.csv not found or empty; using fallback features {features}")
+def build_input(tx, profiles):
+    uid = str(tx.get('user_id'))
+    prof = profiles[profiles['user_id'].astype(str)==uid]
+    base = {f: 0.0 for f in features}
+    base['amount'] = float(tx.get('amount',0.0))
+    base['hour'] = int(tx.get('hour',12))
+    base['is_night'] = 1 if base['hour'] in [0,1,2,3,4,5] else 0
+    if prof.shape[0]>0:
+        base['amount_over_user_avg'] = base['amount'] / (prof.iloc[0].get('user_avg_amount_30d',1.0)+1e-6)
+        base['z_amount_user'] = (base['amount'] - prof.iloc[0].get('user_avg_amount_30d',0.0)) / (prof.iloc[0].get('user_std_amount_30d',1.0)+1e-6)
+    X = pd.DataFrame([base])[features]
+    return X
+def predict_single(tx: dict, root: Path = ROOT) -> tuple:
+    """Predict fraud probability for single transaction.
+    
+    Args:
+        tx: dict with keys: user_id, amount, hour, receiver_id (optional), etc.
+        root: Root directory for loading data.
+        
+    Returns:
+        (probability, decision, details_dict)
+    """
+    # Load users and thresholds
+    profiles_file = root / 'data' / 'user_profiles_modec.csv'
+    profiles = pd.read_csv(profiles_file) if profiles_file.exists() else pd.DataFrame()
+    
+    thresholds_file = root / 'data' / 'user_thresholds_modec.csv'
+    thresholds = pd.read_csv(thresholds_file) if thresholds_file.exists() else pd.DataFrame()
+    
+    # ========================
+    # UPI FRAUD RULE ENGINE
+    # ========================
+    # These business rules override ML predictions
+    
+    user_id = str(tx.get('user_id', '0'))
+    amount = float(tx.get('amount', 0.0))
+    hour = int(tx.get('hour', 12))
+    receiver_id = tx.get('receiver_id', None)
+    
+    # Get user profile data
+    user_avg = 500.0  # default
+    usual_hours = list(range(6, 23))  # default daytime hours
+    if not profiles.empty and user_id in profiles['user_id'].astype(str).values:
+        user_profile = profiles[profiles['user_id'].astype(str) == user_id].iloc[0]
+        user_avg = float(user_profile.get('avg_transaction_amount', user_profile.get('user_avg_amount_30d', 500.0)))
+        # Parse usual hours if available (comma-separated string like "8,9,10,11,12")
+        usual_hours_str = user_profile.get('usual_hours', None)
+        if usual_hours_str and isinstance(usual_hours_str, str):
+            try:
+                usual_hours = [int(h.strip()) for h in usual_hours_str.split(',')]
+            except:
+                pass
+    
+    # RULE 1: Amount < 1000 → ALWAYS LEGIT
+    if amount < 1000:
+        return (0.0, 'LEGIT', {
+            'rule_triggered': 'amount_below_1000',
+            'amount': amount,
+            'xgb_prob': None,
+            'iso_score': None,
+            'meta_prob': 0.0,
+            'threshold': 0.1,
+            'heuristic_used': False
+        })
+    
+    # RULE 2: Amount < user_avg → ALWAYS LEGIT
+    if amount < user_avg:
+        return (0.0, 'LEGIT', {
+            'rule_triggered': 'amount_below_user_avg',
+            'amount': amount,
+            'user_avg': user_avg,
+            'xgb_prob': None,
+            'iso_score': None,
+            'meta_prob': 0.0,
+            'threshold': 0.1,
+            'heuristic_used': False
+        })
+    
+    # RULE 3: Known receiver (used > 10 times) → ALWAYS LEGIT
+    # Check if receiver data exists (optional feature)
+    if receiver_id:
+        # Load transaction history if available
+        history_file = root / 'data' / 'transaction_history.csv'
+        if history_file.exists():
+            try:
+                history = pd.read_csv(history_file)
+                # Count transactions to this receiver by this user
+                receiver_count = len(history[
+                    (history['user_id'].astype(str) == user_id) & 
+                    (history['receiver_id'].astype(str) == str(receiver_id))
+                ])
+                if receiver_count > 10:
+                    return (0.0, 'LEGIT', {
+                        'rule_triggered': 'known_receiver',
+                        'receiver_id': receiver_id,
+                        'receiver_count': receiver_count,
+                        'xgb_prob': None,
+                        'iso_score': None,
+                        'meta_prob': 0.0,
+                        'threshold': 0.1,
+                        'heuristic_used': False
+                    })
+            except:
+                pass  # If history check fails, continue to ML
+    
+    # RULE 4: Low amount + usual hour + no other risk → ALWAYS LEGIT
+    # Only trigger if amount is reasonable AND hour is usual AND no receiver risk
+    if (amount < user_avg * 1.2 and 
+        hour in usual_hours and 
+        not tx.get('is_new_receiver', False) and
+        not tx.get('device_changed', False) and
+        tx.get('receiver_risk_score', 0.0) < 0.6 and
+        tx.get('velocity_1h', 0) <= 3):
+        return (0.0, 'LEGIT', {
+            'rule_triggered': 'safe_normal_transaction',
+            'hour': hour,
+            'amount': amount,
+            'xgb_prob': None,
+            'iso_score': None,
+            'meta_prob': 0.0,
+            'threshold': 0.1,
+            'heuristic_used': False
+        })
+    
+    # If no LEGIT rule triggered, proceed with ML prediction
+    # Build input
+    X = build_input(tx, profiles)
+    
+    # compute predictions
+    xgb_prob = None
+    iso_score = None
+    if xgb is not None:
+        try:
+            xgb_prob = float(xgb.predict_proba(X)[0, 1])
+        except Exception:
+            xgb_prob = 0.5
+    if iso is not None:
+        try:
+            # decision_function negative -> more anomalous; negate to get positive "anomaly score"
+            iso_score = float(-iso.decision_function(X)[0])
+        except Exception:
+            iso_score = 0.0
+    
+    # meta predictions: use raw iso_score directly (no per-sample MinMax)
+    # If both xgb & iso missing, fallback to heuristic
+    if xgb_prob is None and iso_score is None:
+        # heuristic based on amount vs user average
+        user_id = tx.get('user_id', '0')
+        amount = tx.get('amount', 100.0)
+        if not profiles.empty and user_id in profiles['user_id'].values:
+            user_avg = profiles.loc[profiles['user_id'] == user_id, 'avg_transaction_amount'].iloc[0]
+        else:
+            user_avg = 500.0
+        ratio = amount / user_avg if user_avg > 0 else 1.0
+        prob = 0.05 + min(0.9, 0.4 * ratio)  # simple heuristic
+        decision = 'SUSPICIOUS' if prob >= 0.3 else 'LEGIT'
+        return (prob, decision, {'heuristic_used': True, 'amount': amount, 'user_avg': user_avg})
+    
+    # use meta-learners if available
+    # PREFER RAW meta over calibrated (isotonic calibrator is collapsing outputs)
+    if meta is not None and xgb_prob is not None and iso_score is not None:
+        meta_X = np.array([[xgb_prob, iso_score]])
+        prob = float(meta.predict_proba(meta_X)[0, 1])
+    elif cal is not None and xgb_prob is not None and iso_score is not None:
+        meta_X = np.array([[xgb_prob, iso_score]])
+        prob = float(cal.predict_proba(meta_X)[0, 1])
+    elif xgb_prob is not None:
+        prob = xgb_prob
+    else:
+        prob = 0.5
+    
+    # ========================
+    # FRAUD RULES (High Confidence)
+    # ========================
+    # Force FRAUD when amount > 2*user_avg AND at least 2 risk factors present
+    
+    fraud_risk_factors = []
+    
+    if amount > user_avg * 2:
+        # Count high-risk factors
+        sender_location = tx.get('sender_location', None)
+        receiver_location = tx.get('receiver_location', None)
+        
+        # Risk factor 1: Unusual time
+        if hour not in usual_hours:
+            fraud_risk_factors.append('unusual_time')
+        
+        # Risk factor 2: Location mismatch
+        if sender_location and receiver_location and sender_location != receiver_location:
+            fraud_risk_factors.append('location_mismatch')
+        
+        # Risk factor 3: New receiver
+        if tx.get('is_new_receiver', False):
+            fraud_risk_factors.append('new_receiver')
+        
+        # Risk factor 4: Device changed
+        if tx.get('device_changed', False):
+            fraud_risk_factors.append('device_changed')
+        
+        # Risk factor 5: High velocity
+        if tx.get('velocity_1h', 0) > 3:
+            fraud_risk_factors.append('high_velocity')
+        
+        # Risk factor 6: Receiver risk score > 0.85
+        if tx.get('receiver_risk_score', 0.0) > 0.85:
+            fraud_risk_factors.append('receiver_high_risk')
+        
+        # If 2 or more risk factors, force FRAUD
+        if len(fraud_risk_factors) >= 2:
+            fraud_prob = max(0.95, prob) if prob else 0.95
+            return (fraud_prob, 'FRAUD', {
+                'rule_triggered': 'fraud_high_risk',
+                'fraud_factors': fraud_risk_factors,
+                'factor_count': len(fraud_risk_factors),
+                'amount': amount,
+                'user_avg': user_avg,
+                'xgb_prob': xgb_prob,
+                'iso_score': iso_score,
+                'meta_prob': fraud_prob,
+                'threshold': user_threshold if 'user_threshold' in locals() else 0.1,
+                'heuristic_used': False
+            })
+    
+    # ========================
+    # SUSPICIOUS RULES
+    # ========================
+    # Check risk factors - if amount > user_avg AND any flag triggers → force SUSPICIOUS
+    
+    suspicious_flags = []
+    
+    if amount > user_avg:
+        # Check location mismatch
+        sender_location = tx.get('sender_location', None)
+        receiver_location = tx.get('receiver_location', None)
+        if sender_location and receiver_location and sender_location != receiver_location:
+            suspicious_flags.append('location_mismatch')
+        
+        # Check unusual time (hour NOT in usual hours)
+        if hour not in usual_hours:
+            suspicious_flags.append('unusual_time')
+        
+        # Check new receiver
+        is_new_receiver = tx.get('is_new_receiver', False)
+        if is_new_receiver:
+            suspicious_flags.append('new_receiver')
+        
+        # Check device changed
+        device_changed = tx.get('device_changed', False)
+        if device_changed:
+            suspicious_flags.append('device_changed')
+        
+        # Check slight amount spike (> 1.2x user average)
+        if amount > user_avg * 1.2:
+            suspicious_flags.append('amount_spike')
+        
+        # Check receiver risk score (moderately high: 0.6 to 0.85)
+        receiver_risk = tx.get('receiver_risk_score', 0.0)
+        if 0.6 <= receiver_risk <= 0.85:
+            suspicious_flags.append('receiver_risk_moderate')
+        
+        # Check velocity (> 3 transactions in last hour)
+        velocity_1h = tx.get('velocity_1h', 0)
+        if velocity_1h > 3:
+            suspicious_flags.append('high_velocity')
+    
+    # If any suspicious flag triggered, force SUSPICIOUS decision but keep ML probability
+    if suspicious_flags:
+        return (prob, 'SUSPICIOUS', {
+            'rule_triggered': 'suspicious_flags',
+            'flags': suspicious_flags,
+            'amount': amount,
+            'user_avg': user_avg,
+            'xgb_prob': xgb_prob,
+            'iso_score': iso_score,
+            'meta_prob': prob,
+            'threshold': user_threshold if 'user_threshold' in locals() else 0.1,
+            'heuristic_used': False
+        })
+    
+    # Sanity check: small amounts (<100) should never be flagged as high-risk fraud
+    # Cap probability for small transactions to avoid false alarms
+    if amount < 100.0:
+        prob = min(prob, 0.6)  # cap at 0.6 for amounts < ₹100
+    elif amount < 500.0:
+        prob = min(prob, 0.85)  # cap at 0.85 for amounts < ₹500
+    
+    # Lookup user threshold
+    user_id = tx.get('user_id', '0')
+    if not thresholds.empty and user_id in thresholds['user_id'].values:
+        user_threshold = thresholds.loc[thresholds['user_id'] == user_id, 'threshold'].iloc[0]
+    else:
+        user_threshold = 0.1
+    
+    # decision logic
+    if prob >= 0.95:
+        decision = 'FRAUD'
+    elif prob >= user_threshold + 0.05:
+        decision = 'SUSPICIOUS'
+    else:
+        decision = 'LEGIT'
+    
+    details = {
+        'rule_triggered': None,  # No rule triggered, ML prediction used
+        'xgb_prob': xgb_prob,
+        'iso_score': iso_score,
+        'meta_prob': prob,
+        'threshold': user_threshold,
+        'heuristic_used': False
+    }
+    return (prob, decision, details)
