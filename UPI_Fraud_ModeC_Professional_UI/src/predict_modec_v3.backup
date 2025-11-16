@@ -1,0 +1,556 @@
+"""
+UPI Fraud Detection - Mode C Prediction Module
+
+This module implements a 3-tier rule-based + ML ensemble system:
+1. LEGIT Rules (highest priority): Override to safe when conditions met
+2. FRAUD Rules (high confidence): Flag as fraud when multiple risk factors present
+3. SUSPICIOUS Rules: Flag suspicious activity with single risk factors
+4. ML Prediction (fallback): XGBoost + Isolation Forest + Meta ensemble
+
+Author: UPI Fraud Detection Team
+Version: 3.0 - Complete Rule Engine
+"""
+
+import joblib
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from typing import Tuple, Dict, Any, Optional, List
+
+# ================================================================================
+# MODULE CONFIGURATION
+# ================================================================================
+
+# Use module-relative ROOT so files are found regardless of current working directory
+ROOT = Path(__file__).resolve().parents[1]
+
+# Default usual hours (6am - 10pm) if not specified in user profile
+DEFAULT_USUAL_HOURS = list(range(6, 23))
+
+# ================================================================================
+# MODEL LOADING (with safe fallback)
+# ================================================================================
+
+def _safe_load(path: Path) -> Optional[Any]:
+    """
+    Safely load a joblib file, returning None if loading fails.
+    This prevents import-time crashes due to version mismatches or missing dependencies.
+    """
+    try:
+        return joblib.load(path)
+    except Exception as e:
+        print(f"[predict_modec] WARNING: Failed to load {path.name}: {e}")
+        return None
+
+
+# Load ML models (None if loading fails)
+xgb = _safe_load(ROOT / 'models' / 'xgb_raw.joblib')
+iso = _safe_load(ROOT / 'models' / 'isolation_forest.joblib')
+meta = _safe_load(ROOT / 'models' / 'meta_lr.joblib')
+cal = _safe_load(ROOT / 'models' / 'final_calibrated_meta.joblib')
+
+# Load feature list
+try:
+    features = pd.read_csv(ROOT / 'models' / 'feature_list.csv')['feature'].tolist()
+except Exception:
+    features = []
+
+if not features:
+    # Fallback to minimal sensible feature set
+    features = ['amount', 'hour', 'is_night', 'amount_over_user_avg', 'z_amount_user']
+    print(f"[predict_modec] WARNING: Using fallback features: {features}")
+
+
+# ================================================================================
+# HELPER FUNCTIONS
+# ================================================================================
+
+def build_input(tx: Dict[str, Any], profiles: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build feature DataFrame from transaction dict and user profiles.
+    
+    Args:
+        tx: Transaction dict with keys: user_id, amount, hour, etc.
+        profiles: DataFrame with user profile data
+        
+    Returns:
+        DataFrame with features matching the model's expected input
+    """
+    user_id = str(tx.get('user_id', '0'))
+    
+    # Find user profile
+    user_profile = profiles[profiles['user_id'].astype(str) == user_id]
+    
+    # Initialize feature dict with zeros
+    feature_dict = {f: 0.0 for f in features}
+    
+    # Basic transaction features
+    feature_dict['amount'] = float(tx.get('amount', 0.0))
+    feature_dict['hour'] = int(tx.get('hour', 12))
+    feature_dict['is_night'] = 1 if feature_dict['hour'] in [0, 1, 2, 3, 4, 5] else 0
+    
+    # User-relative features (if profile exists)
+    if not user_profile.empty:
+        user_row = user_profile.iloc[0]
+        user_avg = float(user_row.get('avg_transaction_amount', 
+                                       user_row.get('user_avg_amount_30d', 1.0)))
+        user_std = float(user_row.get('user_std_amount_30d', 1.0))
+        
+        if 'amount_over_user_avg' in feature_dict:
+            feature_dict['amount_over_user_avg'] = feature_dict['amount'] / (user_avg + 1e-6)
+        
+        if 'z_amount_user' in feature_dict:
+            feature_dict['z_amount_user'] = (feature_dict['amount'] - user_avg) / (user_std + 1e-6)
+    
+    # Convert to DataFrame with correct column order
+    X = pd.DataFrame([feature_dict])[features]
+    return X
+
+
+def get_user_profile_data(user_id: str, profiles: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Extract user profile data including average amount and usual hours.
+    
+    Args:
+        user_id: User identifier
+        profiles: DataFrame with user profile data
+        
+    Returns:
+        Dict with user_avg, usual_hours, and other profile info
+    """
+    user_id = str(user_id)
+    
+    # Default values
+    profile_data = {
+        'user_avg': 500.0,
+        'usual_hours': DEFAULT_USUAL_HOURS.copy(),
+        'user_std': 100.0,
+        'profile_found': False
+    }
+    
+    if profiles.empty or user_id not in profiles['user_id'].astype(str).values:
+        return profile_data
+    
+    user_row = profiles[profiles['user_id'].astype(str) == user_id].iloc[0]
+    profile_data['profile_found'] = True
+    
+    # Extract average transaction amount
+    profile_data['user_avg'] = float(user_row.get('avg_transaction_amount',
+                                                    user_row.get('user_avg_amount_30d', 500.0)))
+    profile_data['user_std'] = float(user_row.get('user_std_amount_30d', 100.0))
+    
+    # Extract usual hours (comma-separated string like "8,9,10,11,12,14,15,16,17,18")
+    usual_hours_str = user_row.get('usual_hours', None)
+    if usual_hours_str and isinstance(usual_hours_str, str):
+        try:
+            profile_data['usual_hours'] = [int(h.strip()) for h in usual_hours_str.split(',')]
+        except:
+            pass  # Keep default
+    
+    return profile_data
+
+
+def is_receiver_known(user_id: str, receiver_id: str, root: Path, threshold: int = 10) -> Tuple[bool, int]:
+    """
+    Check if receiver is known (has > threshold past transactions).
+    
+    Args:
+        user_id: Sender user ID
+        receiver_id: Receiver ID
+        root: Root directory
+        threshold: Minimum transaction count to consider receiver "known"
+        
+    Returns:
+        (is_known, transaction_count)
+    """
+    history_file = root / 'data' / 'transaction_history.csv'
+    
+    if not history_file.exists():
+        return False, 0
+    
+    try:
+        history = pd.read_csv(history_file)
+        count = len(history[
+            (history['user_id'].astype(str) == str(user_id)) & 
+            (history['receiver_id'].astype(str) == str(receiver_id))
+        ])
+        return count > threshold, count
+    except Exception:
+        return False, 0
+
+
+# ================================================================================
+# RULE ENGINE
+# ================================================================================
+
+def evaluate_rules(
+    tx: Dict[str, Any],
+    ml_prob: float,
+    profile_data: Dict[str, Any],
+    user_threshold: float,
+    root: Path
+) -> Tuple[Optional[float], Optional[str], Dict[str, Any]]:
+    """
+    Evaluate business rules in priority order.
+    
+    Rule Priority:
+    1. LEGIT Rules (highest) - return prob=0.0, decision=LEGIT
+    2. FRAUD Rules (high)    - return prob≥0.95, decision=FRAUD
+    3. SUSPICIOUS Rules      - return ml_prob, decision=SUSPICIOUS
+    4. None                  - let ML decide
+    
+    Args:
+        tx: Transaction dictionary
+        ml_prob: ML model probability (0-1)
+        profile_data: User profile data (user_avg, usual_hours, etc.)
+        user_threshold: User-specific risk threshold
+        root: Root directory for loading data
+        
+    Returns:
+        (probability, decision, rule_info) or (None, None, {}) if no rule triggered
+    """
+    amount = float(tx.get('amount', 0.0))
+    hour = int(tx.get('hour', 12))
+    user_id = str(tx.get('user_id', '0'))
+    receiver_id = tx.get('receiver_id', None)
+    
+    user_avg = profile_data['user_avg']
+    usual_hours = profile_data['usual_hours']
+    
+    # ============================================================================
+    # TIER 1: LEGIT RULES (Highest Priority - Override Everything)
+    # ============================================================================
+    
+    # LEGIT Rule 1: Amount < ₹1000
+    if amount < 1000:
+        return (0.0, 'LEGIT', {
+            'rule_tier': 'LEGIT',
+            'rule_name': 'amount_below_1000',
+            'rule_explanation': f'Transaction amount ₹{amount:.2f} is below ₹1000 threshold',
+            'overrides_ml': True
+        })
+    
+    # LEGIT Rule 2: Amount < User Average
+    if amount < user_avg:
+        return (0.0, 'LEGIT', {
+            'rule_tier': 'LEGIT',
+            'rule_name': 'amount_below_user_avg',
+            'rule_explanation': f'Amount ₹{amount:.2f} < user average ₹{user_avg:.2f}',
+            'user_avg': user_avg,
+            'overrides_ml': True
+        })
+    
+    # LEGIT Rule 3: Known Receiver (> 10 transactions)
+    if receiver_id:
+        is_known, count = is_receiver_known(user_id, receiver_id, root)
+        if is_known:
+            return (0.0, 'LEGIT', {
+                'rule_tier': 'LEGIT',
+                'rule_name': 'known_receiver',
+                'rule_explanation': f'Trusted receiver (sent {count} times previously)',
+                'receiver_id': receiver_id,
+                'receiver_count': count,
+                'overrides_ml': True
+            })
+    
+    # LEGIT Rule 4: Safe Normal Transaction (combined checks)
+    is_safe_normal = (
+        amount < user_avg * 1.2 and
+        hour in usual_hours and
+        not tx.get('is_new_receiver', False) and
+        not tx.get('device_changed', False) and
+        tx.get('receiver_risk_score', 0.0) < 0.6 and
+        tx.get('velocity_1h', 0) <= 3
+    )
+    if is_safe_normal:
+        return (0.0, 'LEGIT', {
+            'rule_tier': 'LEGIT',
+            'rule_name': 'safe_normal_transaction',
+            'rule_explanation': 'Normal transaction with no risk indicators',
+            'checks_passed': ['amount_reasonable', 'usual_hour', 'no_risk_flags'],
+            'overrides_ml': True
+        })
+    
+    # ============================================================================
+    # TIER 2: FRAUD RULES (High Confidence - 2nd Priority)
+    # ============================================================================
+    
+    if amount > user_avg * 2:
+        fraud_factors = []
+        
+        # Count risk factors
+        sender_location = tx.get('sender_location', None)
+        receiver_location = tx.get('receiver_location', None)
+        
+        if hour not in usual_hours:
+            fraud_factors.append('unusual_time')
+        
+        if sender_location and receiver_location and sender_location != receiver_location:
+            fraud_factors.append('location_mismatch')
+        
+        if tx.get('is_new_receiver', False):
+            fraud_factors.append('new_receiver')
+        
+        if tx.get('device_changed', False):
+            fraud_factors.append('device_changed')
+        
+        if tx.get('velocity_1h', 0) > 3:
+            fraud_factors.append('high_velocity')
+        
+        if tx.get('receiver_risk_score', 0.0) > 0.85:
+            fraud_factors.append('receiver_high_risk')
+        
+        # FRAUD Rule: Amount > 2×user_avg AND ≥2 risk factors
+        if len(fraud_factors) >= 2:
+            fraud_prob = max(0.95, ml_prob)
+            return (fraud_prob, 'FRAUD', {
+                'rule_tier': 'FRAUD',
+                'rule_name': 'high_risk_fraud',
+                'rule_explanation': f'{len(fraud_factors)} risk factors detected with large amount',
+                'fraud_factors': fraud_factors,
+                'factor_count': len(fraud_factors),
+                'amount': amount,
+                'user_avg': user_avg,
+                'amount_multiplier': round(amount / user_avg, 2),
+                'overrides_ml': False,
+                'ml_prob_preserved': ml_prob
+            })
+    
+    # ============================================================================
+    # TIER 3: SUSPICIOUS RULES (3rd Priority)
+    # ============================================================================
+    
+    if amount > user_avg:
+        suspicious_flags = []
+        
+        # Check all suspicious indicators
+        sender_location = tx.get('sender_location', None)
+        receiver_location = tx.get('receiver_location', None)
+        
+        if sender_location and receiver_location and sender_location != receiver_location:
+            suspicious_flags.append('location_mismatch')
+        
+        if hour not in usual_hours:
+            suspicious_flags.append('unusual_time')
+        
+        if tx.get('is_new_receiver', False):
+            suspicious_flags.append('new_receiver')
+        
+        if tx.get('device_changed', False):
+            suspicious_flags.append('device_changed')
+        
+        if amount > user_avg * 1.2:
+            suspicious_flags.append('amount_spike')
+        
+        receiver_risk = tx.get('receiver_risk_score', 0.0)
+        if 0.6 <= receiver_risk <= 0.85:
+            suspicious_flags.append('receiver_risk_moderate')
+        
+        if tx.get('velocity_1h', 0) > 3:
+            suspicious_flags.append('high_velocity')
+        
+        # SUSPICIOUS Rule: Amount > user_avg AND ≥1 flag
+        if suspicious_flags:
+            return (ml_prob, 'SUSPICIOUS', {
+                'rule_tier': 'SUSPICIOUS',
+                'rule_name': 'suspicious_activity',
+                'rule_explanation': f'{len(suspicious_flags)} suspicious indicator(s) detected',
+                'suspicious_flags': suspicious_flags,
+                'flag_count': len(suspicious_flags),
+                'amount': amount,
+                'user_avg': user_avg,
+                'overrides_ml': False,
+                'ml_prob_preserved': ml_prob
+            })
+    
+    # No rules triggered - let ML decide
+    return (None, None, {})
+
+
+# ================================================================================
+# MAIN PREDICTION FUNCTION
+# ================================================================================
+
+def predict_single(tx: Dict[str, Any], root: Path = ROOT) -> Tuple[float, str, Dict[str, Any]]:
+    """
+    Predict fraud probability for a single transaction using rule engine + ML ensemble.
+    
+    Process:
+    1. Load user profile and compute user_avg, usual_hours
+    2. Compute ML prediction (XGBoost + Isolation Forest + Meta)
+    3. Evaluate business rules (LEGIT → FRAUD → SUSPICIOUS)
+    4. Apply sanity caps and thresholds
+    5. Return final decision with explanations
+    
+    Args:
+        tx: Transaction dict with keys:
+            - user_id (required)
+            - amount (required)
+            - hour (required)
+            - receiver_id (optional)
+            - sender_location, receiver_location (optional)
+            - is_new_receiver, device_changed (optional)
+            - velocity_1h, receiver_risk_score (optional)
+        root: Root directory for loading data files
+        
+    Returns:
+        Tuple of (probability, decision, details_dict) where:
+        - probability: float 0-1
+        - decision: 'LEGIT', 'SUSPICIOUS', or 'FRAUD'
+        - details_dict: comprehensive info about the decision
+    """
+    # ============================================================================
+    # STEP 1: Load Data
+    # ============================================================================
+    
+    profiles_file = root / 'data' / 'user_profiles_modec.csv'
+    profiles = pd.read_csv(profiles_file) if profiles_file.exists() else pd.DataFrame()
+    
+    thresholds_file = root / 'data' / 'user_thresholds_modec.csv'
+    thresholds = pd.read_csv(thresholds_file) if thresholds_file.exists() else pd.DataFrame()
+    
+    user_id = str(tx.get('user_id', '0'))
+    amount = float(tx.get('amount', 0.0))
+    hour = int(tx.get('hour', 12))
+    
+    # Get user profile
+    profile_data = get_user_profile_data(user_id, profiles)
+    
+    # Get user threshold
+    user_threshold = 0.1  # default
+    if not thresholds.empty and user_id in thresholds['user_id'].astype(str).values:
+        user_threshold = float(thresholds[thresholds['user_id'].astype(str) == user_id]['threshold'].iloc[0])
+    
+    # ============================================================================
+    # STEP 2: Compute ML Prediction
+    # ============================================================================
+    
+    X = build_input(tx, profiles)
+    
+    xgb_prob = None
+    iso_score = None
+    ml_prob = 0.5  # default fallback
+    
+    # XGBoost prediction
+    if xgb is not None:
+        try:
+            xgb_prob = float(xgb.predict_proba(X)[0, 1])
+        except Exception as e:
+            print(f"[predict_modec] XGBoost prediction failed: {e}")
+            xgb_prob = 0.5
+    
+    # Isolation Forest anomaly score
+    if iso is not None:
+        try:
+            # Negative decision_function = more anomalous; negate to get positive score
+            iso_score = float(-iso.decision_function(X)[0])
+        except Exception as e:
+            print(f"[predict_modec] IsolationForest prediction failed: {e}")
+            iso_score = 0.0
+    
+    # Meta ensemble (prefer raw meta over calibrated)
+    if meta is not None and xgb_prob is not None and iso_score is not None:
+        try:
+            meta_X = np.array([[xgb_prob, iso_score]])
+            ml_prob = float(meta.predict_proba(meta_X)[0, 1])
+        except Exception:
+            ml_prob = xgb_prob if xgb_prob is not None else 0.5
+    elif cal is not None and xgb_prob is not None and iso_score is not None:
+        try:
+            meta_X = np.array([[xgb_prob, iso_score]])
+            ml_prob = float(cal.predict_proba(meta_X)[0, 1])
+        except Exception:
+            ml_prob = xgb_prob if xgb_prob is not None else 0.5
+    elif xgb_prob is not None:
+        ml_prob = xgb_prob
+    
+    # ============================================================================
+    # STEP 3: Evaluate Business Rules
+    # ============================================================================
+    
+    rule_prob, rule_decision, rule_info = evaluate_rules(
+        tx, ml_prob, profile_data, user_threshold, root
+    )
+    
+    # If a rule triggered, use its result
+    if rule_decision is not None:
+        final_prob = rule_prob
+        final_decision = rule_decision
+        
+        # Build comprehensive details
+        details = {
+            'probability': final_prob,
+            'decision': final_decision,
+            'rule_triggered': True,
+            'rule_info': rule_info,
+            'ml_prediction': {
+                'xgb_prob': xgb_prob,
+                'iso_score': iso_score,
+                'meta_prob': ml_prob
+            },
+            'user_profile': {
+                'user_avg': profile_data['user_avg'],
+                'usual_hours': profile_data['usual_hours'],
+                'threshold': user_threshold
+            },
+            'transaction': {
+                'amount': amount,
+                'hour': hour
+            }
+        }
+        
+        return (final_prob, final_decision, details)
+    
+    # ============================================================================
+    # STEP 4: ML Decision (No Rules Triggered)
+    # ============================================================================
+    
+    # Apply amount-based sanity caps
+    if amount < 100.0:
+        ml_prob = min(ml_prob, 0.6)  # Never high-risk for small amounts
+    elif amount < 500.0:
+        ml_prob = min(ml_prob, 0.85)
+    
+    # Apply decision thresholds
+    if ml_prob >= 0.95:
+        final_decision = 'FRAUD'
+    elif ml_prob >= user_threshold + 0.05:
+        final_decision = 'SUSPICIOUS'
+    else:
+        final_decision = 'LEGIT'
+    
+    # Build comprehensive details
+    details = {
+        'probability': ml_prob,
+        'decision': final_decision,
+        'rule_triggered': False,
+        'rule_info': {'explanation': 'No business rules triggered - using ML prediction'},
+        'ml_prediction': {
+            'xgb_prob': xgb_prob,
+            'iso_score': iso_score,
+            'meta_prob': ml_prob,
+            'models_used': [
+                'XGBoost' if xgb_prob is not None else None,
+                'IsolationForest' if iso_score is not None else None,
+                'Meta-LR' if meta is not None else None
+            ]
+        },
+        'user_profile': {
+            'user_avg': profile_data['user_avg'],
+            'usual_hours': profile_data['usual_hours'],
+            'threshold': user_threshold,
+            'profile_found': profile_data['profile_found']
+        },
+        'transaction': {
+            'amount': amount,
+            'hour': hour,
+            'user_id': user_id
+        },
+        'decision_logic': {
+            'fraud_threshold': 0.95,
+            'suspicious_threshold': user_threshold + 0.05,
+            'amount_cap_applied': amount < 500.0
+        }
+    }
+    
+    return (ml_prob, final_decision, details)
