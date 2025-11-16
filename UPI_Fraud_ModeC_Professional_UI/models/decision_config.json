@@ -1,0 +1,12 @@
+{
+  "ml_weight": 0.5,
+  "rule_weight": 0.5,
+  "fraud_threshold": 0.85,
+  "suspicious_threshold": 0.6,
+  "notes": {
+    "balanced_accuracy": 0.5125521422660565,
+    "accuracy": 0.6835,
+    "tpr": 0.19480519480519481,
+    "tnr": 0.8302990897269181
+  }
+}

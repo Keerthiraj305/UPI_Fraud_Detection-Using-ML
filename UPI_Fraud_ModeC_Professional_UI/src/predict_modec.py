@@ -31,13 +31,29 @@ from typing import Tuple, Dict, Any, Optional, List
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_USUAL_HOURS = list(range(6, 23))
 
-# Fusion weights (ML vs Rules)
+# Fusion weights (ML vs Rules) - can be overridden via decision_config.json
 ML_WEIGHT = 0.60
 RULE_WEIGHT = 0.40
 
-# Soft thresholds for final classification
+# Soft thresholds for final classification - can be overridden
 FRAUD_THRESHOLD = 0.90
 SUSPICIOUS_THRESHOLD = 0.55
+
+# Optional decision config loader
+import json as _json
+_config_path = ROOT / 'models' / 'decision_config.json'
+if _config_path.exists():
+    try:
+        _cfg = _json.loads(_config_path.read_text())
+        mw = float(_cfg.get('ml_weight', ML_WEIGHT))
+        rw = float(_cfg.get('rule_weight', RULE_WEIGHT))
+        if 0.0 <= mw <= 1.0:
+            ML_WEIGHT = mw
+            RULE_WEIGHT = 1.0 - mw if 'rule_weight' not in _cfg else rw
+        FRAUD_THRESHOLD = float(_cfg.get('fraud_threshold', FRAUD_THRESHOLD))
+        SUSPICIOUS_THRESHOLD = float(_cfg.get('suspicious_threshold', SUSPICIOUS_THRESHOLD))
+    except Exception as _e:
+        print(f"[predict_modec] WARNING: decision_config.json load failed: {_e}")
 
 # ================================================================================
 # MODEL LOADING (Safe fallback)
