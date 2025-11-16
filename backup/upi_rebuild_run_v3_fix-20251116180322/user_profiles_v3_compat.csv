@@ -1,0 +1,11 @@
+user_id,user_avg_amount_30d,user_std_amount_30d,user_tx_count_30d,last_tx_time,last_device,last_receivers
+u_0,5095.5969,2916.8394336667425,100,2024-07-03 15:28:42,dev_156,"[""Lakshit Dyal"",""Mamooty Hans"",""Hridaan Jaggi"",""Anahita Walia"",""Darshit Sura""]"
+u_1,5063.6792,2805.432779333871,100,2024-07-03 11:48:34,dev_149,"[""Reyansh Thaman"",""Hrishita Krishna"",""Baiju Garg"",""Elakshi Chokshi"",""Mishti Rao""]"
+u_2,4943.1257000000005,2864.5696205112686,100,2024-07-03 23:15:06,dev_120,"[""Shanaya Mangal"",""Urvi Kapoor"",""Ishita Mall"",""Divit Ben"",""Dhanush Salvi""]"
+u_3,5156.7759,2982.645586758218,100,2024-07-03 19:58:28,dev_167,"[""Vaibhav Bhasin"",""Manjari Deshmukh"",""Yakshit Edwin"",""Aaryahi Baral"",""Adira Kara""]"
+u_4,5069.193,2817.2130350940874,100,2024-07-03 00:48:25,dev_190,"[""Aayush Gour"",""Piya Sabharwal"",""Adah Sankar"",""Elakshi Bhardwaj"",""Emir Sekhon""]"
+u_5,4661.1927,2786.3493914808614,100,2024-07-03 20:57:02,dev_169,"[""Azad Atwal"",""Nitara Bawa"",""Hazel Mani"",""Ishaan Krishna"",""Lakshit Sachdev""]"
+u_6,4854.587700000001,2936.842814177423,100,2024-07-03 22:39:13,dev_183,"[""Lagan Sodhi"",""Yasmin Bumb"",""Samar Sharma"",""Eshani Shroff"",""Indranil Gupta""]"
+u_7,5237.1869,2985.2863893813683,100,2024-07-03 02:12:05,dev_106,"[""Dhruv Uppal"",""Abram Roy"",""Madhup Sethi"",""Veer Talwar"",""Ayesha Gala""]"
+u_8,5100.8478,2820.3344769261935,100,2024-07-03 14:51:34,dev_181,"[""Saira Vaidya"",""Elakshi Manne"",""Yuvraj  Dey"",""Mohanlal Bath"",""Hridaan Rao""]"
+u_9,4808.0435,2891.3403961905246,100,2024-07-03 22:14:00,dev_132,"[""Ehsaan Sharma"",""Krish Mander"",""Alisha Dara"",""Samarth Toor"",""Anahita Datta""]"
