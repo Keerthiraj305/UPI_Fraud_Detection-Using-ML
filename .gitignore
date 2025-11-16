@@ -3,3 +3,7 @@ __pycache__/
 .pytest_cache/
 *.pyc
 venv/
+# Local runtime PIDs/logs
+.streamlit_pid
+UPI_Fraud_ModeC_Professional_UI/.modec_streamlit_pid
+UPI_Fraud_ModeC_Professional_UI/modec_streamlit.log
