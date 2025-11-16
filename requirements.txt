@@ -1,0 +1,13 @@
+pandas>=1.5
+numpy>=1.24
+scikit-learn>=1.2
+streamlit>=1.22
+joblib>=1.2
+shap>=0.41
+# optional: uncomment if you want to include XGBoost
+# xgboost>=1.7
+matplotlib>=3.7
+
+# Development / type-hints
+typing-extensions>=4.7
+mypy>=1.10

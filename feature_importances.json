@@ -1,0 +1,16 @@
+{
+  "z_amount_user": 0.41215704118158986,
+  "device_changed": 0.3062699070747185,
+  "hour": 0.15095169974394274,
+  "amount_over_user_avg": 0.11890026130965395,
+  "is_night": 0.008672678198962107,
+  "time_since_last_tx_minutes": 0.002098110474379083,
+  "dayofweek": 0.0009343690722946448,
+  "velocity_24h": 1.5932944459148878e-05,
+  "is_weekend": 0.0,
+  "is_new_receiver": 0.0,
+  "velocity_1h": 0.0,
+  "is_large_tx": 0.0,
+  "is_local_transfer": 0.0,
+  "receiver_risk_score": 0.0
+}
